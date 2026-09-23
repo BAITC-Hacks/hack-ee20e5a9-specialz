@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Граф денег · Аналитик</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#172d3b;background:#f2f5f7}*{box-sizing:border-box}body{margin:0}main{max-width:1450px;margin:auto;padding:28px}h1{margin:0 0 8px;font-size:30px}h2{font-size:20px;margin:0 0 16px}h3{font-size:16px}p{line-height:1.5}.muted{color:#526777}.warning{background:#fff3cd;border-left:5px solid #bd7900;padding:14px 18px;margin:20px 0;font-weight:600}.panel{background:white;border:1px solid #d7e1e7;border-radius:12px;padding:20px;margin-bottom:18px}.layout{display:grid;grid-template-columns:340px minmax(0,1fr);gap:20px}form{display:flex;gap:10px}input{min-width:0;flex:1;padding:12px;border:1px solid #879eae;border-radius:6px;font-size:17px;font-family:monospace}button{cursor:pointer;font:inherit}form button{background:#146257;color:white;border:0;border-radius:6px;padding:10px 24px}button:focus-visible,input:focus-visible{outline:3px solid #198eae;outline-offset:3px}.link{color:#075e73;background:none;border:0;padding:4px 0;text-decoration:underline;font-family:monospace;font-size:14px;text-align:left}.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:13px;margin:18px 0}.badge{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid #d5dde3;border-radius:20px;background:white}.dot{width:10px;height:10px;border-radius:50%;display:inline-block}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:16px;margin:20px 0}.metric{min-width:0;overflow-wrap:anywhere;background:#f4f7f9;padding:12px;border-radius:6px}.metric small{display:block;color:#526777;margin-bottom:6px}.metric strong{font-size:18px;display:block;overflow-wrap:anywhere}.metric p{font-size:12px;color:#526777;margin:8px 0 0}.layout>div{min-width:0}summary{cursor:pointer;font-weight:600;padding:12px 0}#explanation{line-height:1.7;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%;font-size:14px}td,th{text-align:left;padding:9px 8px;border-bottom:1px solid #e5ebef;vertical-align:top}th{color:#526777;font-size:12px}td.num,th.num{text-align:right;white-space:nowrap}.scroll{overflow:auto}.evidence{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;background:#f4f7f9;padding:14px;border-radius:6px}#node-gid{font-family:monospace;overflow-wrap:anywhere}#status{min-height:24px;margin:10px 0;color:#8c390f}#top tr.selected{background:#e3f3ee}footer{font-size:13px;color:#526777}caption{text-align:left;margin-bottom:10px;color:#526777} [hidden]{display:none!important}@media(max-width:900px){.layout{grid-template-columns:1fr}main{padding:16px}form{flex-wrap:wrap}.top-scroll{max-height:300px;overflow:auto}}
+</style>
+</head>
+<body><main>
+<header><h1>Граф денег</h1><div class="muted">Рабочее место аналитика · локальный снимок рассчитанных данных</div></header>
+<div class="warning" role="note">Роли и приоритеты — гипотезы для проверки, не вывод о виновности.</div>
+<div id="legend" class="legend" aria-label="Легенда ролей"></div>
+<section class="panel"><form id="search"><label for="gid" class="muted">Полный gid</label><input id="gid" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="100000008346837100" aria-label="Полный gid"><button type="submit">Найти узел</button></form><div id="status" role="status" aria-live="polite"></div><div id="counts" class="muted"></div></section>
+<div class="layout">
+<aside class="panel"><h2>Топ-25 по приоритету</h2><div class="top-scroll"><table><thead><tr><th>№ / gid</th><th class="num">Приоритет</th></tr></thead><tbody id="top"></tbody></table></div></aside>
+<div><section id="card" class="panel" hidden><h2 id="node-gid"></h2><div id="role"></div><div id="metrics" class="metrics"></div><h3>Почему назначена эта роль</h3><p id="explanation"></p><details id="technical"><summary>Технические показатели</summary><div id="evidence" class="evidence"></div></details><p id="coverage" class="muted"></p></section>
+<section id="links" hidden><div class="panel"><h2>Ближайшие соседи · направление переводов</h2><p id="diagram-note" class="muted"></p><div id="diagram" class="scroll"></div></div><div class="panel"><h2>Входящие связи → выбранный узел</h2><div class="scroll"><table><caption id="in-caption"></caption><thead><tr><th>Отправитель → получатель</th><th class="num">Сумма, ₸</th><th class="num">Переводов</th></tr></thead><tbody id="incoming"></tbody></table></div></div><div class="panel"><h2>Исходящие связи: выбранный узел →</h2><div class="scroll"><table><caption id="out-caption"></caption><thead><tr><th>Отправитель → получатель</th><th class="num">Сумма, ₸</th><th class="num">Переводов</th></tr></thead><tbody id="outgoing"></tbody></table></div></div></section></div></div>
+<footer>Суммы и связи относятся только к доступной выборке. Обрезка глубины — артефакт обхода, не подтверждённый «сток». У seed-клиентов входящие суммы неполны. Страница работает без сервера и интернета; для обновления данных повторите генерацию.</footer>
+</main>
+<script id="project-data" type="application/json">__PROJECT_DATA__</script>
+<script>
+'use strict';
+const data=JSON.parse(document.getElementById('project-data').textContent);
+const nodes=new Map(data.nodes.map(n=>[n.gid,n]));
+const colors={consolidator:'red',distributor:'orange',transit:'#dbc000',terminal:'blue',coordinator:'purple',peripheral:'gray'};
+const labels={consolidator:'Накопитель',distributor:'Распределитель',transit:'Транзит',terminal:'Нет наблюдаемого выхода',coordinator:'Координатор',peripheral:'Периферия'};
+const byId=id=>document.getElementById(id);
+const money=value=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(Number(value))+' ₸';
+const priority=value=>new Intl.NumberFormat('ru-RU',{minimumFractionDigits:3,maximumFractionDigits:3}).format(Number(value));
+function el(tag,text,className){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;}
+function badge(role){const b=el('span',undefined,'badge');const d=el('span',undefined,'dot');d.style.backgroundColor=colors[role]||'gray';b.append(d,document.createTextNode((labels[role]||role)+' · '+role));return b;}
+function nodeButton(gid){const b=el('button',gid,'link');b.type='button';b.addEventListener('click',()=>selectNode(gid));return b;}
+for(const role of Object.keys(colors))byId('legend').append(badge(role));
+byId('counts').textContent=`${data.nodes.length} узлов · ${data.edges.length} направленных связей · идентификаторы сохраняются строками`;
+for(const n of data.top){const tr=el('tr');tr.dataset.gid=n.gid;const cell=el('td');cell.append(el('small',n.rank+' · '),nodeButton(n.gid));tr.append(cell,el('td',priority(n.priority_score),'num'));byId('top').append(tr);}
+function edgeTable(id,edges){const body=byId(id);body.replaceChildren();if(!edges.length){const c=el('td','Нет связей в доступной выборке');c.colSpan=3;const r=el('tr');r.append(c);body.append(r);return;}for(const e of edges){const r=el('tr');const direction=el('td');direction.append(nodeButton(e.src),document.createTextNode(' → '),nodeButton(e.dst));r.append(direction,el('td',money(e.sum_kzt),'num'),el('td',String(e.n_tx),'num'));body.append(r);}}
+function drawNeighbors(gid,incoming,outgoing){
+    const ns='http://www.w3.org/2000/svg';
+    const svgEl=(tag,attrs={},text)=>{const e=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,String(v));if(text!==undefined)e.textContent=text;return e;};
+    const left=incoming.slice(0,12),right=outgoing.slice(0,12);
+    const height=Math.max(190,Math.max(left.length,right.length)*72+60),cy=height/2;
+    const svg=svgEl('svg',{viewBox:`0 0 940 ${height}`,width:940,height,role:'img','aria-label':'Направленная схема ближайших соседей'});
+    const defs=svgEl('defs'),marker=svgEl('marker',{id:'arrow',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto'});
+    marker.append(svgEl('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:'#526777'}));defs.append(marker);svg.append(defs);
+    function line(x1,y1,x2,y2){svg.append(svgEl('line',{x1,y1,x2,y2,stroke:'#879eae','stroke-width':1.5,'marker-end':'url(#arrow)'}));}
+    function box(id,x,y){const n=nodes.get(id),g=svgEl('g',{role:'button',tabindex:0,'aria-label':`Открыть ${id}, ${n.role}, кластер ${n.cluster_id}`,style:'cursor:pointer'});
+        g.append(svgEl('rect',{x,y,width:260,height:54,rx:8,fill:'#f4f7f9',stroke:colors[n.role]||'gray','stroke-width':3}));
+        g.append(svgEl('text',{x:x+12,y:y+22,'font-size':15,'font-family':'monospace',fill:'#172d3b'},id));
+        g.append(svgEl('text',{x:x+12,y:y+43,'font-size':12,fill:'#526777'},`${n.role} · кластер ${n.cluster_id}`));
+        g.addEventListener('click',()=>selectNode(id));g.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();selectNode(id);}});svg.append(g);}
+    left.forEach((e,i)=>line(275,57+i*72,340,cy));
+    right.forEach((e,i)=>line(600,cy,665,57+i*72));
+    left.forEach((e,i)=>box(e.src,15,30+i*72));right.forEach((e,i)=>box(e.dst,665,30+i*72));box(gid,340,cy-27);
+    byId('diagram').replaceChildren(svg);
+    byId('diagram-note').textContent=`Отправители → выбранный узел → получатели. Показано ${left.length} из ${incoming.length} входящих и ${right.length} из ${outgoing.length} исходящих связей (до 12 по сумме каждого направления). Все связи — в таблицах ниже. Цвет рамки — роль; кластер подписан у каждого узла.`;
+}
+function selectNode(gid){byId('gid').value=gid;const n=nodes.get(gid);byId('card').hidden=!n;byId('links').hidden=!n;for(const row of byId('top').children)row.classList.toggle('selected',row.dataset.gid===gid);if(!n){byId('status').textContent='Узел не найден. Введите полный gid точно как в данных.';return;}byId('status').textContent='Найден узел '+gid;byId('node-gid').textContent=gid;byId('role').replaceChildren(badge(n.role));byId('metrics').replaceChildren();for(const [label,value,hint] of [['Приоритет проверки',priority(n.priority_score),'от 0 до 1; относительный порядок проверки, не вероятность нарушения'],['Кластер',n.cluster_id],['Входящая сумма',money(n.in_kzt)],['Исходящая сумма',money(n.out_kzt)],['Входящие / исходящие связи',n.in_deg+' / '+n.out_deg,'Разных наблюдаемых отправителей / получателей; не число переводов.'],['Исходный клиент',n.is_seed==='True'?'Да':'Нет']]){const box=el('div',undefined,'metric');box.append(el('small',label),el('strong',value));if(hint)box.append(el('p',hint));byId('metrics').append(box);}byId('explanation').textContent=n.explanation;byId('technical').open=false;byId('evidence').textContent=n.evidence;byId('coverage').textContent=n.truncated_by_depth==='True'?'Артефакт глубины: исходящие связи за границей обхода не наблюдаются.':n.is_seed==='True'?'Исходный клиент: входящая сумма занижена по устройству выборки. Соотношение сумм не доказывает транзит или накопление.':'Метрики описывают наблюдаемую выборку.';const incoming=data.edges.filter(e=>e.dst===gid).sort((a,b)=>b.sum_kzt-a.sum_kzt);const outgoing=data.edges.filter(e=>e.src===gid).sort((a,b)=>b.sum_kzt-a.sum_kzt);drawNeighbors(gid,incoming,outgoing);edgeTable('incoming',incoming);edgeTable('outgoing',outgoing);byId('in-caption').textContent=incoming.length+' связей · получатель '+gid;byId('out-caption').textContent=outgoing.length+' связей · отправитель '+gid;}
+byId('search').addEventListener('submit',event=>{event.preventDefault();selectNode(byId('gid').value.trim());});
+if(data.top.length)selectNode(data.top[0].gid);
+</script></body></html>
