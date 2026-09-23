@@ -5,17 +5,14 @@
 Что он делает:
   1. грузит три parquet-файла и проверяет их консистентность;
   2. собирает направленный взвешенный граф;
-  3. считает БАЗОВЫЕ метрики узлов (степени, обороты, PageRank);
-  4. пишет три выгрузки в требуемой ТЗ схеме — с ПУСТЫМИ ролями.
+  3. считает метрики, назначает роли, Louvain-кластеры и приоритеты;
+  4. пишет три выгрузки в требуемой ТЗ схеме.
 
 Чего он НЕ делает — это ваша работа:
-  * не присваивает роли,
-  * не кластеризует,
-  * не ранжирует узлы,
   * не рисует граф.
 
 Запуск:
-    python starter.py --data ../data --out ./out
+    python starter.py --data ./data --out ./out
 """
 
 import argparse
@@ -115,6 +112,7 @@ def assign_roles(df, G, is_seed_col='is_seed'):
     df = df.copy()
     centrality = nx.betweenness_centrality(G, weight=None)
     betweenness = df['gid'].map(centrality).fillna(0.0)
+    df['betweenness'] = betweenness
     threshold = betweenness.quantile(0.95)
     roles, scores, evidence = [], [], []
 
@@ -156,18 +154,94 @@ def assign_roles(df, G, is_seed_col='is_seed'):
     return df
 
 
+def assign_clusters_and_priority(df, G):
+    """Louvain, min–max приоритет и сводка кластеров.
+
+    Доля seed — среди уникальных соседей обоих направлений, без самого
+    узла; для изолятов 0. Постоянные метрики нормализуются в 0.
+    Внутренний оборот считаем по исходному направленному графу,
+    сохраняя оба перевода для взаимных рёбер.
+    """
+    df = df.copy()
+    UG = G.to_undirected()
+    UG.add_nodes_from(df['gid'])
+    if UG.size(weight='sum_kzt') > 0:
+        communities = nx.community.louvain_communities(UG, weight='sum_kzt', seed=42)
+    else:
+        communities = [{gid} for gid in UG]
+    communities = sorted(communities, key=lambda members: min(members))
+    membership = {gid: cid for cid, members in enumerate(communities) for gid in members}
+    df['cluster_id'] = df['gid'].map(membership).astype(int)
+
+    def normalized(values):
+        span = values.max() - values.min()
+        return (values - values.min()) / span if span > 0 else values * 0.0
+
+    seeds = set(df.loc[df['is_seed'], 'gid'])
+    seed_fractions = {}
+    for gid in df['gid']:
+        neighbors = set(UG.neighbors(gid)) - {gid}
+        seed_fractions[gid] = len(neighbors & seeds) / len(neighbors) if neighbors else 0.0
+    df['seed_neighbor_fraction'] = df['gid'].map(seed_fractions).astype(float)
+    df['pagerank_normalized'] = normalized(df['pagerank'])
+    df['betweenness_normalized'] = normalized(df['betweenness'])
+    df['role_priority'] = df['role'].map({
+        'consolidator': 1.0, 'coordinator': 1.0, 'distributor': 0.5,
+    }).fillna(0.0)
+    df['priority_score'] = (
+        0.4 * df['pagerank_normalized'] + 0.3 * df['betweenness_normalized']
+        + 0.2 * df['role_priority'] + 0.1 * df['seed_neighbor_fraction']
+    )
+    df['why'] = pd.Series([
+        f'PR_norm={r.pagerank_normalized:.4f} × 0.4; '
+        f'BC_norm={r.betweenness_normalized:.4f} × 0.3; '
+        f'роль={r.role} ({r.role_priority:g} × 0.2); '
+        f'доля seed-соседей={r.seed_neighbor_fraction:.4f} × 0.1'
+        for r in df.itertuples(index=False)
+    ], index=df.index, dtype=object)
+
+    internal = {cid: 0.0 for cid in range(len(communities))}
+    for src, dst, data in G.edges(data=True):
+        if membership[src] == membership[dst]:
+            internal[membership[src]] += float(data['sum_kzt'])
+    patterns = {
+        'consolidator': 'Возможно накопление средств',
+        'coordinator': 'Возможно координирование потоков',
+        'distributor': 'Возможно распределение средств',
+        'transit': 'Возможен транзит средств',
+        'terminal': 'Возможно завершение потоков или обрезка по глубине',
+        'peripheral': 'Преобладают периферийные узлы',
+    }
+    records = []
+    for cid, group in df.groupby('cluster_id', sort=True):
+        counts = group['role'].value_counts()
+        dominant = sorted(counts[counts == counts.max()].index)[0]
+        n_seed = int(group['is_seed'].sum())
+        top = group.sort_values(['pagerank', 'gid'], ascending=[False, True]).head(5)
+        records.append({
+            'cluster_id': cid, 'n_nodes': len(group), 'n_seed': n_seed,
+            'sum_kzt_internal': internal[cid],
+            'top_gids': ';'.join(str(gid) for gid in top['gid']),
+            'hypothesis': f'{patterns[dominant]}; доминирует {dominant} '
+                          f'({counts[dominant]}/{len(group)}); seed={n_seed}.',
+        })
+    clusters = pd.DataFrame(records, columns=[
+        'cluster_id', 'n_nodes', 'n_seed', 'sum_kzt_internal', 'top_gids', 'hypothesis',
+    ])
+    return df, clusters
+
+
 # ---------------------------------------------------------------- выгрузки
 
-def write_outputs(df: pd.DataFrame, out_dir: Path):
+def write_outputs(df: pd.DataFrame, out_dir: Path, clusters: pd.DataFrame):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. nodes_roles.csv — схема из ТЗ, рассчитанные значения из df
     roles = df[["gid"]].copy()
     roles["role"] = df["role"]
     roles["role_score"] = df["role_score"]
-    # assign_roles пока не рассчитывает кластеры и приоритеты.
-    roles["cluster_id"] = df.get("cluster_id", -1)
-    roles["priority_score"] = df.get("priority_score", 0.0)
+    roles["cluster_id"] = df["cluster_id"]
+    roles["priority_score"] = df["priority_score"]
     roles["evidence"] = df["evidence"]
     roles = roles.merge(
         df[["gid", "in_deg", "out_deg", "in_kzt", "out_kzt", "pagerank",
@@ -175,14 +249,14 @@ def write_outputs(df: pd.DataFrame, out_dir: Path):
         on="gid", how="left")
     roles.to_csv(out_dir / "nodes_roles.csv", index=False)
 
-    # 2. clusters.csv — пустой каркас
-    pd.DataFrame(columns=["cluster_id", "n_nodes", "n_seed",
-                          "sum_kzt_internal", "top_gids", "hypothesis"]) \
-        .to_csv(out_dir / "clusters.csv", index=False)
+    # 2. clusters.csv — сводка Louvain-кластеров
+    clusters.to_csv(out_dir / "clusters.csv", index=False)
 
-    # 3. top_nodes.csv — пустой каркас, нужно ≥20 строк
-    pd.DataFrame(columns=["rank", "gid", "role", "priority_score", "why"]) \
-        .to_csv(out_dir / "top_nodes.csv", index=False)
+    # 3. top_nodes.csv — до 25 узлов с максимальным приоритетом
+    top = df.sort_values(['priority_score', 'gid'], ascending=[False, True]).head(25)
+    top = top[['gid', 'role', 'priority_score', 'why']].copy()
+    top.insert(0, 'rank', range(1, len(top) + 1))
+    top.to_csv(out_dir / "top_nodes.csv", index=False)
 
     print(f"Выгрузки записаны в {out_dir}/")
 
@@ -213,7 +287,8 @@ def hints(G: nx.DiGraph, df: pd.DataFrame):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="../data", help="папка с parquet-файлами")
+    ap.add_argument("--data", default=Path(__file__).resolve().parent / "data",
+                    help="папка с parquet-файлами (по умолчанию data рядом со скриптом)")
     ap.add_argument("--out", default="./out", help="куда писать выгрузки")
     a = ap.parse_args()
 
@@ -222,7 +297,8 @@ def main():
     G = build_graph(edges)
     df = basic_features(G, nodes)
     df = assign_roles(df, G)
-    write_outputs(df, Path(a.out))
+    df, clusters = assign_clusters_and_priority(df, G)
+    write_outputs(df, Path(a.out), clusters)
     hints(G, df)
 
 
